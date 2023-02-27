@@ -20,7 +20,7 @@
 
 %%---------------------------------------------------------------------------
 
--export_type([socket/0, ip_port/0, hostname/0]).
+-export_type([socket/0, ip_port/0, hostname/0, endpoint/0]).
 
 -type stat_option() ::
         'recv_cnt' | 'recv_max' | 'recv_avg' | 'recv_oct' | 'recv_dvi' |
@@ -32,6 +32,8 @@
                  {raw, non_neg_integer(), non_neg_integer(), binary()}].
 -type hostname() :: inet:hostname().
 -type ip_port() :: inet:port_number().
+-type family() :: inet | inet6 | local | auto.
+-type endpoint() :: {inet:ip_address() | inet:local_address(), ip_port(), family()}.
 -type rabbit_proxy_socket() :: {'rabbit_proxy_socket', ranch_transport:socket(), ranch_proxy_header:proxy_info()}.
 % -type host_or_ip() :: binary() | inet:ip_address().
 -spec is_ssl(socket()) -> boolean().
@@ -67,6 +69,7 @@
           ok_val_or_error({inet:ip_address(), ip_port()}).
 -spec peercert(socket()) ->
           'nossl' | ok_val_or_error(rabbit_cert_info:certificate()).
+-spec tcp_host(inet:ip_address() | inet:local_address()) -> string().
 -spec connection_string(socket(), 'inbound' | 'outbound') ->
           ok_val_or_error(string()).
 % -spec socket_ends(socket() | ranch_proxy:proxy_socket() | ranch_proxy_ssl:ssl_socket(),
@@ -257,12 +260,12 @@ socket_ends({rabbit_proxy_socket, _, ProxyInfo}, _) ->
 maybe_ntoab(Addr) when is_tuple(Addr) -> rabbit_misc:ntoab(Addr);
 maybe_ntoab(Host)                     -> Host.
 
+tcp_host({local, _File}) ->
+    "localhost";
 tcp_host({0,0,0,0}) ->
     hostname();
-
 tcp_host({0,0,0,0,0,0,0,0}) ->
     hostname();
-
 tcp_host(IPAddress) ->
     case inet:gethostbyaddr(IPAddress) of
         {ok, #hostent{h_name = Name}} -> Name;

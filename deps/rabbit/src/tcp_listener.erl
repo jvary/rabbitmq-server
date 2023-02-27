@@ -39,39 +39,40 @@
 
 -behaviour(gen_server).
 
--export([start_link/5]).
+-export([start_link/4]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--record(state, {on_shutdown, label, ip, port}).
+-type endpoint() :: rabbit_net:endpoint().
+
+-record(state, {on_shutdown :: mfargs(), label :: string(), endpoint :: endpoint()}).
 
 %%----------------------------------------------------------------------------
 
 -type mfargs() :: {atom(), atom(), [any()]}.
 
 -spec start_link
-        (inet:ip_address(), inet:port_number(),
+        (endpoint(),
          mfargs(), mfargs(), string()) ->
                            rabbit_types:ok_pid_or_error().
 
-start_link(IPAddress, Port,
+start_link(EndPoint,
            OnStartup, OnShutdown, Label) ->
     gen_server:start_link(
-      ?MODULE, {IPAddress, Port,
+      ?MODULE, {EndPoint,
                 OnStartup, OnShutdown, Label}, []).
 
 %%--------------------------------------------------------------------
 
-init({IPAddress, Port, {M, F, A}, OnShutdown, Label}) ->
+init({EndPoint, {M, F, A}, OnShutdown, Label}) ->
     process_flag(trap_exit, true),
-    logger:info("started ~ts on ~ts:~tp", [Label, rabbit_misc:ntoab(IPAddress), Port]),
-    apply(M, F, A ++ [IPAddress, Port]),
+    logger:info("started ~ts on ~ts", [Label, rabbit_misc:ntoab(EndPoint)]),
+    apply(M, F, A ++ [EndPoint]),
     State0 = #state{
         on_shutdown = OnShutdown,
         label = Label,
-        ip = IPAddress,
-        port = Port
+        endpoint = EndPoint
     },
     {ok, obfuscate_state(State0)}.
 
@@ -84,13 +85,13 @@ handle_cast(_Msg, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, #state{on_shutdown = OnShutdown, label = Label, ip = IPAddress, port = Port}) ->
-    logger:info("stopped ~ts on ~ts:~tp", [Label, rabbit_misc:ntoab(IPAddress), Port]),
+terminate(_Reason, #state{on_shutdown = OnShutdown, label = Label, endpoint =  EndPoint}) ->
+    logger:info("stopped ~ts on ~ts", [Label, EndPoint]),
     try
-        OnShutdown(IPAddress, Port)
+        OnShutdown(EndPoint)
     catch _:Error ->
-        logger:error("Failed to stop ~ts on ~ts:~tp: ~tp",
-                     [Label, rabbit_misc:ntoab(IPAddress), Port, Error])
+        logger:error("Failed to stop ~ts on ~ts: ~tp",
+                     [Label, rabbit_misc:ntoab(EndPoint), Error])
     end.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -100,7 +101,7 @@ obfuscate_state(#state{on_shutdown = OnShutdown} = State) ->
     {M, F, A} = OnShutdown,
     State#state{
         %% avoids arguments from being logged in case of an exception
-        on_shutdown = fun(IPAddress, Port) ->
-          apply(M, F, A ++ [IPAddress, Port])
+        on_shutdown = fun(EndPoint) ->
+          apply(M, F, A ++ [EndPoint])
         end
     }.

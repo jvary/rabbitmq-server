@@ -16,23 +16,24 @@
 
 -behaviour(supervisor).
 
--export([start_link/12]).
+-export([start_link/11]).
 -export([init/1]).
 
 -type mfargs() :: {atom(), atom(), [any()]}.
+-type endpoint() :: rabbit_net:endpoint().
 
 -spec start_link
-        (inet:ip_address(), inet:port_number(), module(), [gen_tcp:listen_option()],
+        (endpoint(), module(), [gen_tcp:listen_option()],
          module(), any(), mfargs(), mfargs(), integer(), integer(), 'worker' | 'supervisor', string()) ->
                            rabbit_types:ok_pid_or_error().
 
-start_link(IPAddress, Port, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
+start_link(EndPoint, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
            ConcurrentAcceptorCount, ConcurrentConnsSups, ConnectionType, Label) ->
     supervisor:start_link(
-      ?MODULE, {IPAddress, Port, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
+      ?MODULE, {EndPoint, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
                 ConcurrentAcceptorCount, ConcurrentConnsSups, ConnectionType, Label}).
 
-init({IPAddress, Port, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
+init({EndPoint, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
       ConcurrentAcceptorCount, ConcurrentConnsSups, ConnectionType, Label}) ->
     {ok, AckTimeout} = application:get_env(rabbit, ssl_handshake_timeout),
     MaxConnections = max_conn(rabbit_misc:get_env(rabbit, connection_max, infinity),
@@ -42,18 +43,23 @@ init({IPAddress, Port, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, On
       max_connections => MaxConnections,
       handshake_timeout => AckTimeout,
       connection_type => ConnectionType,
-      socket_opts => [{ip, IPAddress},
-                      {port, Port} |
-                      SocketOpts],
+      socket_opts => socket_opts(EndPoint, SocketOpts),
       num_conns_sups => ConcurrentConnsSups
      },
     Flags = {one_for_all, 10, 10},
-    OurChildSpecStart = {tcp_listener, start_link, [IPAddress, Port, OnStartup, OnShutdown, Label]},
+    OurChildSpecStart = {tcp_listener, start_link, [EndPoint, OnStartup, OnShutdown, Label]},
     OurChildSpec = {tcp_listener, OurChildSpecStart, transient, 16#ffffffff, worker, [tcp_listener]},
-    RanchChildSpec = ranch:child_spec(rabbit_networking:ranch_ref(IPAddress, Port),
+    RanchChildSpec = ranch:child_spec(rabbit_networking:ranch_ref(EndPoint),
         Transport, RanchListenerOpts,
         ProtoSup, ProtoOpts),
     {ok, {Flags, [RanchChildSpec, OurChildSpec]}}.
+
+-spec socket_opts(endpoint(), list()) -> list().
+socket_opts({{local, File}, _, local}, SocketOpts) ->
+  Local = {local, iolist_to_binary(File)},  % ranch code seems to deal only with binaries even if its spec is inet:local_address ?
+  [{ip, Local}, {port, 0} | SocketOpts];
+socket_opts({IPAddress, Port, Family}, SocketOpts) ->
+  [{ip, IPAddress}, {port, Port}, Family | SocketOpts].
 
 max_conn(infinity, _) ->
     infinity;

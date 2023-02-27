@@ -31,7 +31,7 @@
 -export([throw_on_error/2, with_exit_handler/2, is_abnormal_exit/1,
          filter_exit_map/2]).
 -export([ensure_ok/2]).
--export([tcp_name/3, format_inet_error/1]).
+-export([tcp_name/2, format_inet_error/1]).
 -export([upmap/2, map_in_order/2, utf8_safe/1]).
 -export([dirty_dump_log/1]).
 -export([format/2, format_many/1, format_stderr/2]).
@@ -165,7 +165,7 @@
 -spec is_abnormal_exit(any()) -> boolean().
 -spec filter_exit_map(fun ((A) -> B), [A]) -> [B].
 -spec ensure_ok(ok_or_error(), atom()) -> 'ok'.
--spec tcp_name(atom(), inet:ip_address(), rabbit_net:ip_port()) ->
+-spec tcp_name(atom(), rabbit_net:endpoint()) ->
           atom().
 -spec format_inet_error(atom()) -> string().
 -spec upmap(fun ((A) -> B), [A]) -> [B].
@@ -205,8 +205,8 @@
                  {bad_edge, [digraph:vertex()]}),
                 digraph:vertex(), digraph:vertex()}).
 -spec const(A) -> thunk(A).
--spec ntoa(inet:ip_address()) -> string().
--spec ntoab(inet:ip_address()) -> string().
+-spec ntoa(inet:ip_address() | inet:local_address()) -> string().
+-spec ntoab(inet:ip_address() | inet:local_address() | rabbit_net:endpoint()) -> string().
 -spec is_process_alive(pid()) -> boolean().
 
 -spec pmerge(term(), term(), [term()]) -> [term()].
@@ -516,7 +516,10 @@ filter_exit_map(F, L) ->
 ensure_ok(ok, _) -> ok;
 ensure_ok({error, Reason}, ErrorTag) -> throw({error, {ErrorTag, Reason}}).
 
-tcp_name(Prefix, IPAddress, Port)
+tcp_name(Prefix, {{local, File}, _, local}) when is_atom(Prefix) ->
+  list_to_atom(
+    format("~w_~ts", [Prefix, File]));
+tcp_name(Prefix, {IPAddress, Port, _Family})
   when is_atom(Prefix) andalso is_number(Port) ->
     list_to_atom(
       format("~w_~ts:~w", [Prefix, inet_parse:ntoa(IPAddress), Port])).
@@ -863,6 +866,8 @@ build_acyclic_graph(VertexFun, EdgeFun, Graph) ->
 
 const(X) -> fun () -> X end.
 
+ntoa({local, File}) ->
+    format("~ts", [File]);
 %% Format IPv4-mapped IPv6 addresses as IPv4, since they're what we see
 %% when IPv6 is enabled but not used (i.e. 99% of the time).
 ntoa({0,0,0,0,0,16#ffff,AB,CD}) ->
@@ -870,6 +875,10 @@ ntoa({0,0,0,0,0,16#ffff,AB,CD}) ->
 ntoa(IP) ->
     inet_parse:ntoa(IP).
 
+ntoab({Address, Port, Family} = Address) when is_atom(Family) andalso is_integer(Port)->
+    format("~ts:~w", [ntoab(Address), Port]);
+ntoab({local, _} = Address) ->
+    ntoa(Address);
 ntoab(IP) ->
     Str = ntoa(IP),
     case string:str(Str, ":") of

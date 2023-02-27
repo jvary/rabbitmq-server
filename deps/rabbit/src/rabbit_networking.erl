@@ -76,12 +76,13 @@
 
 -type hostname() :: rabbit_net:hostname().
 -type ip_port() :: rabbit_net:ip_port().
+-type family() :: rabbit_net:family().
+-type endpoint() :: rabbit_net:endpoint().
 
--type family() :: atom().
 -type listener_config() :: ip_port() |
                            {hostname(), ip_port()} |
-                           {hostname(), ip_port(), family()}.
--type address() :: {inet:ip_address(), ip_port(), family()}.
+                           {hostname(), ip_port(), family()} |
+                           inet:local_address().
 -type name_prefix() :: atom().
 -type protocol() :: atom().
 -type label() :: string().
@@ -174,8 +175,10 @@ log_poodle_fail(Context) ->
 fix_ssl_options(Config) ->
     rabbit_ssl_options:fix(Config).
 
--spec tcp_listener_addresses(listener_config()) -> [address()].
+-spec tcp_listener_addresses(listener_config()) -> [endpoint()].
 
+tcp_listener_addresses({local, _File} = Address)->
+    [{Address, 0, local}];
 tcp_listener_addresses(Port) when is_integer(Port) ->
     tcp_listener_addresses_auto(Port);
 tcp_listener_addresses({"auto", Port}) ->
@@ -202,39 +205,45 @@ tcp_listener_spec(NamePrefix, Address, SocketOpts, Transport, ProtoSup, ProtoOpt
                       Protocol, NumAcceptors, 1, Label).
 
 -spec tcp_listener_spec
-        (name_prefix(), address(), [gen_tcp:listen_option()], module(), module(),
+        (name_prefix(), endpoint(), [gen_tcp:listen_option()], module(), module(),
          any(), protocol(), non_neg_integer(), non_neg_integer(), label()) ->
             supervisor:child_spec().
 
-tcp_listener_spec(NamePrefix, Address, SocketOpts,
+tcp_listener_spec(NamePrefix, EndPoint, SocketOpts,
                   Transport, ProtoSup, ProtoOpts, Protocol, NumAcceptors,
                   ConcurrentConnsSupsCount, Label) ->
-    tcp_listener_spec(NamePrefix, Address, SocketOpts, Transport, ProtoSup, ProtoOpts,
+    tcp_listener_spec(NamePrefix, EndPoint, SocketOpts, Transport, ProtoSup, ProtoOpts,
                       Protocol, NumAcceptors, ConcurrentConnsSupsCount, supervisor, Label).
 
 -spec tcp_listener_spec
-        (name_prefix(), address(), [gen_tcp:listen_option()], module(), module(),
+        (name_prefix(), endpoint(), [gen_tcp:listen_option()], module(), module(),
          any(), protocol(), non_neg_integer(), non_neg_integer(), 'supervisor' | 'worker', label()) ->
             supervisor:child_spec().
 
-tcp_listener_spec(NamePrefix, {IPAddress, Port, Family}, SocketOpts,
+tcp_listener_spec(NamePrefix, EndPoint, SocketOpts,
                   Transport, ProtoHandler, ProtoOpts, Protocol, NumAcceptors,
                   ConcurrentConnsSupsCount, ConnectionType, Label) ->
-    Args = [IPAddress, Port, Transport, [Family | SocketOpts], ProtoHandler, ProtoOpts,
+    Args = [EndPoint, Transport, SocketOpts, ProtoHandler, ProtoOpts,
             {?MODULE, tcp_listener_started, [Protocol, SocketOpts]},
             {?MODULE, tcp_listener_stopped, [Protocol, SocketOpts]},
             NumAcceptors, ConcurrentConnsSupsCount, ConnectionType, Label],
-    {rabbit_misc:tcp_name(NamePrefix, IPAddress, Port),
+    {rabbit_misc:tcp_name(NamePrefix, EndPoint),
      {tcp_listener_sup, start_link, Args},
      transient, infinity, supervisor, [tcp_listener_sup]}.
 
--spec ranch_ref(#listener{} | [{atom(), any()}] | 'undefined') -> ranch:ref() | undefined.
+-spec ranch_ref(#listener{} | [{atom(), any()}] | endpoint() | 'undefined') -> ranch:ref() | undefined.
+ranch_ref(#listener{ip_address = {local, File}}) ->
+    {acceptor, {local, iolist_to_binary(File)}};
 ranch_ref(#listener{port = Port}) ->
     [{IPAddress, Port, _Family} | _] = tcp_listener_addresses(Port),
     {acceptor, IPAddress, Port};
 ranch_ref(Listener) when is_list(Listener) ->
     Port = rabbit_misc:pget(port, Listener),
     [{IPAddress, Port, _Family} | _] = tcp_listener_addresses(Port),
+    {acceptor, IPAddress, Port};
+ranch_ref({{local, File}, _, local}) ->
+    {acceptor, {local, iolist_to_binary(File)}};
+ranch_ref({IPAddress, Port, _}) when is_number(Port) ->
     {acceptor, IPAddress, Port};
 ranch_ref(undefined) ->
     undefined.
@@ -243,7 +252,7 @@ ranch_ref(undefined) ->
 
 %% Returns a reference that identifies a TCP listener in Ranch.
 ranch_ref(IPAddress, Port) ->
-    {acceptor, IPAddress, Port}.
+  {acceptor, IPAddress, Port}.
 
 -spec ranch_ref_of_protocol(atom()) -> ranch:ref() | undefined.
 ranch_ref_of_protocol(Protocol) ->
@@ -306,21 +315,20 @@ start_listener(Listener, NumAcceptors, ConcurrentConnsSupsCount, Protocol, Label
                         Error
                 end, ok, tcp_listener_addresses(Listener)).
 
-start_listener0(Address, NumAcceptors, ConcurrentConnsSupsCount, Protocol, Label, Opts) ->
+start_listener0(EndPoint, NumAcceptors, ConcurrentConnsSupsCount, Protocol, Label, Opts) ->
     Transport = transport(Protocol),
-    Spec = tcp_listener_spec(rabbit_tcp_listener_sup, Address, Opts,
+    Spec = tcp_listener_spec(rabbit_tcp_listener_sup, EndPoint, Opts,
                              Transport, rabbit_connection_sup, [], Protocol,
                              NumAcceptors, ConcurrentConnsSupsCount, Label),
+    {AddressString, Port} = address_string_and_port(EndPoint),
     case supervisor:start_child(rabbit_sup, Spec) of
         {ok, _}          -> ok;
         {error, {{shutdown, {failed_to_start_child, _,
                              {shutdown, {failed_to_start_child, _,
                                          {listen_error, _, PosixError}}}}}, _}} ->
-            {IPAddress, Port, _Family} = Address,
-            {error, {could_not_start_listener, rabbit_misc:ntoa(IPAddress), Port, PosixError}};
+            {error, {could_not_start_listener, AddressString, Port, PosixError}};
         {error, Other} ->
-            {IPAddress, Port, _Family} = Address,
-            {error, {could_not_start_listener, rabbit_misc:ntoa(IPAddress), Port, Other}}
+            {error, {could_not_start_listener, AddressString, Port, Other}}
     end.
 
 transport(Protocol) ->
@@ -336,44 +344,42 @@ stop_tcp_listener(Listener) ->
         Address <- tcp_listener_addresses(Listener)],
     ok.
 
-stop_tcp_listener0({IPAddress, Port, _Family}) ->
-    Name = rabbit_misc:tcp_name(rabbit_tcp_listener_sup, IPAddress, Port),
+stop_tcp_listener0(EndPoint) ->
+    Name = rabbit_misc:tcp_name(rabbit_tcp_listener_sup, EndPoint),
     ok = supervisor:terminate_child(rabbit_sup, Name),
     ok = supervisor:delete_child(rabbit_sup, Name).
 
--spec tcp_listener_started
-        (_, _,
-         string() |
-         {byte(),byte(),byte(),byte()} |
-         {char(),char(),char(),char(),char(),char(),char(),char()}, _) ->
-            'ok'.
 
-tcp_listener_started(Protocol, Opts, IPAddress, Port) ->
+-spec tcp_listener_started(atom(), list(), string() | inet:ip_address(), rabbit_net:ip_port()) -> 'ok'.
+tcp_listener_started(Protocol, Opts, IPAddress, Port)->
+  EndPoint = endpoint_from_ip_address_and_port(IPAddress, Port),
+  tcp_listener_started(Protocol, Opts, EndPoint).
+
+-spec tcp_listener_started(atom(), list(), endpoint()) -> 'ok'.
+tcp_listener_started(Protocol, Opts, {Address, Port, _}) ->
     %% We need the ip to distinguish e.g. 0.0.0.0 and 127.0.0.1
     %% We need the host so we can distinguish multiple instances of the above
     %% in a cluster.
     L = #listener{node = node(),
                   protocol = Protocol,
-                  host = tcp_host(IPAddress),
-                  ip_address = IPAddress,
+                  host = tcp_host(Address),
+                  ip_address = Address,
                   port = Port,
                   opts = Opts},
     true = ets:insert(?ETS_TABLE, L),
     ok.
 
--spec tcp_listener_stopped
-        (_, _,
-         string() |
-         {byte(),byte(),byte(),byte()} |
-         {char(),char(),char(),char(),char(),char(),char(),char()},
-         _) ->
-            'ok'.
-
+-spec tcp_listener_stopped(atom(), list(), string() | inet:ip_address(), rabbit_net:ip_port()) -> 'ok'.
 tcp_listener_stopped(Protocol, Opts, IPAddress, Port) ->
+    EndPoint = endpoint_from_ip_address_and_port(IPAddress, Port),
+    tcp_listener_stopped(Protocol, Opts, EndPoint).
+
+-spec tcp_listener_stopped(atom(), list(), endpoint()) -> 'ok'.
+tcp_listener_stopped(Protocol, Opts, {Address, Port, _}) ->
     L = #listener{node = node(),
                   protocol = Protocol,
-                  host = tcp_host(IPAddress),
-                  ip_address = IPAddress,
+                  host = tcp_host(Address),
+                  ip_address = Address,
                   port = Port,
                   opts = Opts},
     true = ets:delete_object(?ETS_TABLE, L),
@@ -618,8 +624,8 @@ tune_buffer_size1(Sock) ->
 
 %%--------------------------------------------------------------------
 
-tcp_host(IPAddress) ->
-    rabbit_net:tcp_host(IPAddress).
+tcp_host(Address) ->
+    rabbit_net:tcp_host(Address).
 
 cmap(F) -> rabbit_misc:filter_exit_map(F, connections()).
 
@@ -746,3 +752,21 @@ ipv6_status(TestPort) ->
 ensure_listener_table_for_this_node() ->
     _ = ets:new(?ETS_TABLE, [named_table, public, bag, {keypos, #listener.node}]),
     ok.
+
+address_string_and_port({{local, _File} = LocalAddress, _, local}) ->
+  {rabbit_misc:ntoa(LocalAddress), 0};
+address_string_and_port({IPAddress, Port, _Family}) ->
+  {rabbit_misc:ntoa(IPAddress), Port}.
+
+-spec endpoint_from_ip_address_and_port(string() | inet:ip_address(), rabbit_net:ip_port()) -> endpoint().
+endpoint_from_ip_address_and_port(Address, Port) when is_list(Address) ->
+  {ok, IpAddress} = inet:parse_address(Address),
+  case tuple_size(IpAddress) of
+    4 -> {IpAddress, Port, inet};
+    8 -> {IpAddress, Port, inet6}
+  end;
+endpoint_from_ip_address_and_port(Address, Port) when is_tuple(Address) ->
+  case tuple_size(Address) of
+    4 -> {Address, Port, inet};
+    8 -> {Address, Port, inet6}
+  end.

@@ -96,11 +96,7 @@
                   kind         :: Kind,
                   name         :: Name}).
 
--type(listener() ::
-        #listener{node     :: node(),
-                  protocol :: atom(),
-                  host     :: rabbit_net:hostname(),
-                  port     :: rabbit_net:ip_port()}).
+-type(listener() :: #listener{}).
 
 -type rabbit_amqqueue_name() :: rabbit_types:r('queue').
 

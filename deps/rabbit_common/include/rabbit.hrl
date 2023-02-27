@@ -106,7 +106,13 @@
 -record(trie_edge, {exchange_name, node_id, word}).
 -record(trie_binding, {exchange_name, node_id, destination, arguments}).
 
--record(listener, {node, protocol, host, ip_address, port, opts = []}).
+-record(listener,
+        {node :: node(),
+          protocol :: atom(),
+          host :: inet:hostname(),
+          ip_address :: inet:ip_address() | inet:local_address() | string(),
+          port :: inet:port_number(),
+          opts = [] :: list()}).
 
 -record(runtime_parameters, {key, value}).
 
