@@ -107,12 +107,12 @@
 -record(trie_binding, {exchange_name, node_id, destination, arguments}).
 
 -record(listener,
-        {node :: node(),
-          protocol :: atom(),
-          host :: inet:hostname(),
-          ip_address :: inet:ip_address() | inet:local_address() | string(),
-          port :: inet:port_number(),
-          opts = [] :: list()}).
+        {node :: node() | '_',
+          protocol :: atom() | '_',
+          host :: inet:hostname() | '_',
+          ip_address :: inet:ip_address() | inet:local_address() | string() | '_',
+          port :: inet:port_number() | '_',
+          opts = [] :: list() | '_'}).
 
 -record(runtime_parameters, {key, value}).
 

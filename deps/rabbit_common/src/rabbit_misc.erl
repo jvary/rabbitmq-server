@@ -875,7 +875,7 @@ ntoa({0,0,0,0,0,16#ffff,AB,CD}) ->
 ntoa(IP) ->
     inet_parse:ntoa(IP).
 
-ntoab({Address, Port, Family} = Address) when is_atom(Family) andalso is_integer(Port)->
+ntoab({Address, Port, Family} = _EndPoint) when is_atom(Family) andalso is_integer(Port)->
     format("~ts:~w", [ntoab(Address), Port]);
 ntoab({local, _} = Address) ->
     ntoa(Address);

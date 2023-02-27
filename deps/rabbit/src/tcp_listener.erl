@@ -45,8 +45,9 @@
          terminate/2, code_change/3]).
 
 -type endpoint() :: rabbit_net:endpoint().
+-type shutdown_fun() :: fun(() -> ok).
 
--record(state, {on_shutdown :: mfargs(), label :: string(), endpoint :: endpoint()}).
+-record(state, {on_shutdown :: shutdown_fun(), label :: string(), endpoint :: endpoint()}).
 
 %%----------------------------------------------------------------------------
 
@@ -69,12 +70,12 @@ init({EndPoint, {M, F, A}, OnShutdown, Label}) ->
     process_flag(trap_exit, true),
     logger:info("started ~ts on ~ts", [Label, rabbit_misc:ntoab(EndPoint)]),
     apply(M, F, A ++ [EndPoint]),
-    State0 = #state{
-        on_shutdown = OnShutdown,
+    State = #state{
         label = Label,
-        endpoint = EndPoint
+        endpoint = EndPoint,
+        on_shutdown = obfuscate_shutdown(EndPoint, OnShutdown)
     },
-    {ok, obfuscate_state(State0)}.
+    {ok, State}.
 
 handle_call(_Request, _From, State) ->
     {noreply, State}.
@@ -88,7 +89,7 @@ handle_info(_Info, State) ->
 terminate(_Reason, #state{on_shutdown = OnShutdown, label = Label, endpoint =  EndPoint}) ->
     logger:info("stopped ~ts on ~ts", [Label, EndPoint]),
     try
-        OnShutdown(EndPoint)
+        OnShutdown()
     catch _:Error ->
         logger:error("Failed to stop ~ts on ~ts: ~tp",
                      [Label, rabbit_misc:ntoab(EndPoint), Error])
@@ -97,11 +98,9 @@ terminate(_Reason, #state{on_shutdown = OnShutdown, label = Label, endpoint =  E
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-obfuscate_state(#state{on_shutdown = OnShutdown} = State) ->
+-spec obfuscate_shutdown(endpoint(), mfargs()) -> shutdown_fun().
+obfuscate_shutdown(EndPoint, OnShutdown) ->
     {M, F, A} = OnShutdown,
-    State#state{
-        %% avoids arguments from being logged in case of an exception
-        on_shutdown = fun(EndPoint) ->
+    fun() ->
           apply(M, F, A ++ [EndPoint])
-        end
-    }.
+    end.
