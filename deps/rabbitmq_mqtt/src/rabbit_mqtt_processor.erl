@@ -186,7 +186,7 @@ process_connect(
             send_conn_ack(?CONNACK_ACCEPT, SessPresent, ProtoVerAtom, SendFun),
             {ok, State};
         {error, ReturnErrCode} = Err
-          when is_number(ReturnErrCode) ->
+          when is_integer(ReturnErrCode) ->
             %% If a server sends a CONNACK packet containing a non-zero return
             %% code it MUST set Session Present to 0 [MQTT-3.2.2-4].
             SessPresent = false,
@@ -247,15 +247,6 @@ process_request(?PUBACK,
     end;
 
 process_request(?PUBLISH,
-                Packet = #mqtt_packet{
-                            fixed = Fixed = #mqtt_packet_fixed{qos = ?QOS_2}},
-                State) ->
-    % Downgrade QOS_2 to QOS_1
-    process_request(?PUBLISH,
-                    Packet#mqtt_packet{
-                      fixed = Fixed#mqtt_packet_fixed{qos = ?QOS_1}},
-                    State);
-process_request(?PUBLISH,
                 #mqtt_packet{
                    fixed = #mqtt_packet_fixed{qos = Qos,
                                               retain = Retain,
@@ -264,44 +255,30 @@ process_request(?PUBLISH,
                                                    packet_id = PacketId },
                    payload = Payload},
                 State0 = #state{unacked_client_pubs = U,
-                                cfg = #cfg{retainer_pid = RPid,
-                                           proto_ver = ProtoVer}}) ->
+                                cfg = #cfg{proto_ver = ProtoVer}}) ->
+    EffectiveQos = maybe_downgrade_qos(Qos),
     rabbit_global_counters:messages_received(ProtoVer, 1),
     State = maybe_increment_publisher(State0),
-    Publish = fun() ->
-                      Msg = #mqtt_msg{retain     = Retain,
-                                      qos        = Qos,
-                                      topic      = Topic,
-                                      dup        = Dup,
-                                      packet_id  = PacketId,
-                                      payload    = Payload},
-                      case publish_to_queues(Msg, State) of
-                          {ok, _} = Ok ->
-                              case Retain of
-                                  false ->
-                                      ok;
-                                  true ->
-                                      hand_off_to_retainer(RPid, Topic, Msg)
-                              end,
-                              Ok;
-                          Error ->
-                              Error
-                      end
-              end,
-    case Qos of
-        N when N > ?QOS_0 ->
+    Msg = #mqtt_msg{retain     = Retain,
+                    qos        = EffectiveQos,
+                    topic      = Topic,
+                    dup        = Dup,
+                    packet_id  = PacketId,
+                    payload    = Payload},
+    case EffectiveQos of
+        ?QOS_0 ->
+            publish_to_queues_with_checks(Msg, State);
+        ?QOS_1 ->
             rabbit_global_counters:messages_received_confirm(ProtoVer, 1),
             case rabbit_mqtt_confirms:contains(PacketId, U) of
                 false ->
-                    publish_to_queues_with_checks(Topic, Publish, State);
+                    publish_to_queues_with_checks(Msg, State);
                 true ->
                     %% Client re-sent this PUBLISH packet.
                     %% We already sent this message to target queues awaiting confirmations.
                     %% Hence, we ignore this re-send.
                     {ok, State}
-            end;
-        _ ->
-            publish_to_queues_with_checks(Topic, Publish, State)
+            end
     end;
 
 process_request(?SUBSCRIBE,
@@ -322,7 +299,7 @@ process_request(?SUBSCRIBE,
          (#mqtt_topic{name = TopicName,
                       qos = TopicQos},
           {L, S0}) ->
-              QoS = supported_sub_qos(TopicQos),
+              QoS = maybe_downgrade_qos(TopicQos),
               maybe
                   ok ?= maybe_replace_old_sub(TopicName, QoS, S0),
                   {ok, Q} ?= ensure_queue(QoS, S0),
@@ -663,16 +640,23 @@ maybe_send_retained_message(RPid, #mqtt_topic{name = Topic0, qos = SubscribeQos}
             State
     end.
 
-make_will_msg(#mqtt_packet_connect{will_flag   = false}) ->
+make_will_msg(#mqtt_packet_connect{will_flag = false}) ->
     undefined;
-make_will_msg(#mqtt_packet_connect{will_retain = Retain,
-                                   will_qos    = Qos,
-                                   will_topic  = Topic,
-                                   will_msg    = Msg}) ->
-    #mqtt_msg{retain  = Retain,
-              qos     = Qos,
-              topic   = Topic,
-              dup     = false,
+make_will_msg(#mqtt_packet_connect{will_flag = true,
+                                   will_retain = Retain,
+                                   will_qos = Qos,
+                                   will_topic = Topic,
+                                   will_msg = Msg}) ->
+    EffectiveQos = maybe_downgrade_qos(Qos),
+    Correlation = case EffectiveQos of
+                      ?QOS_0 -> undefined;
+                      ?QOS_1 -> ?WILL_MSG_QOS_1_CORRELATION
+                  end,
+    #mqtt_msg{retain = Retain,
+              qos = EffectiveQos,
+              packet_id = Correlation,
+              topic = Topic,
+              dup = false,
               payload = Msg}.
 
 check_vhost_exists(VHost, Username, PeerIp) ->
@@ -885,13 +869,13 @@ creds(User, Pass, SSLLoginName) ->
 auth_attempt_failed(PeerIp, Username) ->
     rabbit_core_metrics:auth_attempt_failed(PeerIp, Username, mqtt).
 
-supported_sub_qos(?QOS_0) -> ?QOS_0;
-supported_sub_qos(?QOS_1) -> ?QOS_1;
-supported_sub_qos(?QOS_2) -> ?QOS_1.
-
 delivery_mode(?QOS_0) -> 1;
 delivery_mode(?QOS_1) -> 2;
 delivery_mode(?QOS_2) -> 2.
+
+maybe_downgrade_qos(?QOS_0) -> ?QOS_0;
+maybe_downgrade_qos(?QOS_1) -> ?QOS_1;
+maybe_downgrade_qos(?QOS_2) -> ?QOS_1.
 
 ensure_queue(QoS, State = #state{auth_state = #auth_state{user = #user{username = Username}}}) ->
     case get_queue(QoS, State) of
@@ -1155,9 +1139,9 @@ process_routing_confirm(#delivery{confirm = false},
     rabbit_global_counters:messages_unroutable_dropped(ProtoVer, 1),
     State;
 process_routing_confirm(#delivery{confirm = true,
-                                  msg_seq_no = undefined},
+                                  msg_seq_no = ?WILL_MSG_QOS_1_CORRELATION},
                         [], State = #state{cfg = #cfg{proto_ver = ProtoVer}}) ->
-    %% unroutable will message with QoS > 0
+    %% unroutable will message with QoS 1
     rabbit_global_counters:messages_unroutable_dropped(ProtoVer, 1),
     State;
 process_routing_confirm(#delivery{confirm = true,
@@ -1172,8 +1156,8 @@ process_routing_confirm(#delivery{confirm = true,
 process_routing_confirm(#delivery{confirm = false}, _, State) ->
     State;
 process_routing_confirm(#delivery{confirm = true,
-                                  msg_seq_no = undefined}, [_|_], State) ->
-    %% routable will message with QoS > 0
+                                  msg_seq_no = ?WILL_MSG_QOS_1_CORRELATION}, [_|_], State) ->
+    %% routable will message with QoS 1
     State;
 process_routing_confirm(#delivery{confirm = true,
                                   msg_seq_no = PktId},
@@ -1227,25 +1211,16 @@ terminate(SendWill, ConnName, ProtoFamily,
     maybe_decrement_publisher(State),
     maybe_delete_mqtt_qos0_queue(State).
 
-maybe_send_will(
-  true, ConnStr,
-  #state{cfg = #cfg{retainer_pid = RPid,
-                    will_msg = WillMsg = #mqtt_msg{retain = Retain,
-                                                   topic = Topic}}
-        } = State) ->
-    ?LOG_DEBUG("sending MQTT will message to topic ~s on connection ~s",
-               [Topic, ConnStr]),
-    case check_topic_access(Topic, write, State) of
-        ok ->
-            _ = publish_to_queues(WillMsg, State),
-            case Retain of
-                false ->
-                    ok;
-                true ->
-                    hand_off_to_retainer(RPid, Topic, WillMsg)
-            end;
-        {error, access_refused = Reason}  ->
-            ?LOG_ERROR("failed to send will message: ~p", [Reason])
+-spec maybe_send_will(boolean(), binary(), state()) -> ok.
+maybe_send_will(true, ConnStr,
+                State = #state{cfg = #cfg{will_msg = WillMsg = #mqtt_msg{topic = Topic}}}) ->
+    case publish_to_queues_with_checks(WillMsg, State) of
+        {ok, _} ->
+            ?LOG_DEBUG("sent MQTT will message to topic ~s on connection ~s",
+                       [Topic, ConnStr]);
+        {error, Reason, _} ->
+            ?LOG_DEBUG("failed to send MQTT will message to topic ~s on connection ~s: ~p",
+                       [Topic, ConnStr, Reason])
     end;
 maybe_send_will(_, _, _) ->
     ok.
@@ -1547,17 +1522,31 @@ trace_tap_out(Msg0 = {?QUEUE_TYPE_QOS_0, _, _, _, _},
             trace_tap_out(Msg, State)
     end.
 
+-spec publish_to_queues_with_checks(mqtt_msg(), state()) ->
+    {ok, state()} | {error, any(), state()}.
 publish_to_queues_with_checks(
-  TopicName, PublishFun,
-  #state{cfg = #cfg{exchange = Exchange},
-         auth_state = #auth_state{user = User,
-                                  authz_ctx = AuthzCtx}
-        } = State) ->
+  Msg = #mqtt_msg{topic = Topic,
+                  retain = Retain},
+  State = #state{cfg = #cfg{exchange = Exchange,
+                            retainer_pid = RPid},
+                 auth_state = #auth_state{user = User,
+                                          authz_ctx = AuthzCtx}}) ->
     case check_resource_access(User, Exchange, write, AuthzCtx) of
         ok ->
-            case check_topic_access(TopicName, write, State) of
+            case check_topic_access(Topic, write, State) of
                 ok ->
-                    PublishFun();
+                    case publish_to_queues(Msg, State) of
+                        {ok, _} = Ok ->
+                            case Retain of
+                                false ->
+                                    ok;
+                                true ->
+                                    hand_off_to_retainer(RPid, Topic, Msg)
+                            end,
+                            Ok;
+                        Error ->
+                            Error
+                    end;
                 {error, access_refused} ->
                     {error, unauthorized, State}
             end;
@@ -1648,7 +1637,7 @@ mailbox_soft_limit_exceeded() ->
 is_socket_busy(Socket) ->
     case rabbit_net:getstat(Socket, [send_pend]) of
         {ok, [{send_pend, NumBytes}]}
-          when is_number(NumBytes) andalso NumBytes > 0 ->
+          when is_integer(NumBytes) andalso NumBytes > 0 ->
             true;
         _ ->
             false

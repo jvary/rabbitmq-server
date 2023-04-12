@@ -79,6 +79,7 @@ subgroups() ->
          ,non_clean_sess_reconnect_qos1
          ,non_clean_sess_reconnect_qos0
          ,non_clean_sess_reconnect_qos0_and_qos1
+         ,non_clean_sess_empty_client_id
          ,subscribe_same_topic_same_qos
          ,subscribe_same_topic_different_qos
          ,subscribe_multiple
@@ -90,7 +91,8 @@ subgroups() ->
          ,block
          ,amqp_to_mqtt_qos0
          ,clean_session_disconnect_client
-         ,clean_session_kill_node
+         ,clean_session_node_restart
+         ,clean_session_node_kill
          ,rabbit_status_connection_count
          ,trace
          ,max_packet_size_unauthenticated
@@ -242,10 +244,10 @@ pubsub_separate_connections(Config) ->
 will_with_disconnect(Config) ->
     LastWillTopic = <<"/topic/last-will">>,
     LastWillMsg = <<"last will message">>,
-    PubOpts = [{will_topic, LastWillTopic},
-               {will_payload, LastWillMsg},
-               {will_qos, 1}],
-    Pub = connect(<<(atom_to_binary(?FUNCTION_NAME))/binary, "_publisher">>, Config, PubOpts),
+    Opts = [{will_topic, LastWillTopic},
+            {will_payload, LastWillMsg},
+            {will_qos, 1}],
+    Pub = connect(<<(atom_to_binary(?FUNCTION_NAME))/binary, "_publisher">>, Config, Opts),
     Sub = connect(<<(atom_to_binary(?FUNCTION_NAME))/binary, "_subscriber">>, Config),
     {ok, _, [1]} = emqtt:subscribe(Sub, LastWillTopic, qos1),
 
@@ -259,10 +261,10 @@ will_with_disconnect(Config) ->
 will_without_disconnect(Config) ->
     LastWillTopic = <<"/topic/last-will">>,
     LastWillMsg = <<"last will message">>,
-    PubOpts = [{will_topic, LastWillTopic},
-               {will_payload, LastWillMsg},
-               {will_qos, 1}],
-    Pub = connect(<<(atom_to_binary(?FUNCTION_NAME))/binary, "_publisher">>, Config, PubOpts),
+    Opts = [{will_topic, LastWillTopic},
+            {will_payload, LastWillMsg},
+            {will_qos, 1}],
+    Pub = connect(<<(atom_to_binary(?FUNCTION_NAME))/binary, "_publisher">>, Config, Opts),
     timer:sleep(100),
     [ServerPublisherPid] = all_connection_pids(Config),
     Sub = connect(<<(atom_to_binary(?FUNCTION_NAME))/binary, "_subscriber">>, Config),
@@ -852,6 +854,16 @@ non_clean_sess_reconnect_qos0_and_qos1(Config) ->
     C3 = connect(ClientId, Config, [{clean_start, true}]),
     ok = emqtt:disconnect(C3).
 
+%% "If the Client supplies a zero-byte ClientId with CleanSession set to 0,
+%% the Server MUST respond to the CONNECT Packet with a CONNACK return code 0x02
+%% (Identifier rejected) and then close the Network Connection" [MQTT-3.1.3-8].
+non_clean_sess_empty_client_id(Config) ->
+    {C, Connect} = util:start_client(<<>>, Config, 0, [{clean_start, false}]),
+    process_flag(trap_exit, true),
+    ?assertMatch({error, {client_identifier_not_valid, _}},
+                 Connect(C)),
+    ok = await_exit(C).
+
 subscribe_same_topic_same_qos(Config) ->
     C = connect(?FUNCTION_NAME, Config),
     Topic = <<"a/b">>,
@@ -1234,7 +1246,13 @@ clean_session_disconnect_client(Config) ->
     L = rpc(Config, rabbit_amqqueue, list, []),
     ?assertEqual(0, length(L)).
 
-clean_session_kill_node(Config) ->
+clean_session_node_restart(Config) ->
+    clean_session_node_down(stop_node, Config).
+
+clean_session_node_kill(Config) ->
+    clean_session_node_down(kill_node, Config).
+
+clean_session_node_down(NodeDown, Config) ->
     C = connect(?FUNCTION_NAME, Config),
     {ok, _, _} = emqtt:subscribe(C, <<"topic0">>, qos0),
     {ok, _, _} = emqtt:subscribe(C, <<"topic1">>, qos1),
@@ -1248,18 +1266,27 @@ clean_session_kill_node(Config) ->
             ?assertEqual(0, length(QsQos0)),
             ?assertEqual(2, length(QsClassic))
     end,
-    ?assertEqual(2, rpc(Config, ets, info, [rabbit_durable_queue, size])),
+    Tables = [rabbit_durable_queue,
+              rabbit_queue,
+              rabbit_durable_route,
+              rabbit_semi_durable_route,
+              rabbit_route,
+              rabbit_reverse_route,
+              rabbit_topic_trie_node,
+              rabbit_topic_trie_edge,
+              rabbit_topic_trie_binding],
+    [?assertNotEqual(0, rpc(Config, ets, info, [T, size])) || T <- Tables],
 
     unlink(C),
-    ok = rabbit_ct_broker_helpers:kill_node(Config, 0),
+    ok = rabbit_ct_broker_helpers:NodeDown(Config, 0),
     ok = rabbit_ct_broker_helpers:start_node(Config, 0),
 
-    %% After terminating a clean session by a node crash, we expect any session
-    %% state to be cleaned up on the server once the server comes back up.
-    ?assertEqual(0, rpc(Config, ets, info, [rabbit_durable_queue, size])).
+    %% After terminating a clean session by either node crash or graceful node shutdown, we
+    %% expect any session state to be cleaned up on the server once the server finished booting.
+    [?assertEqual(0, rpc(Config, ets, info, [T, size])) || T <- Tables].
 
 rabbit_status_connection_count(Config) ->
-    _ = rabbit_ct_client_helpers:open_connection(Config, 0),
+    _Pid = rabbit_ct_client_helpers:open_connection(Config, 0),
     C = connect(?FUNCTION_NAME, Config),
 
     {ok, String} = rabbit_ct_broker_helpers:rabbitmqctl(Config, 0, ["status"]),

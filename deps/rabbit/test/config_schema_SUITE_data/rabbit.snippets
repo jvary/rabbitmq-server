@@ -1,3 +1,6 @@
+% vim:ft=erlang:
+%
+
 [{internal_auth_backend,
   "auth_backends.1 = internal",
   [{rabbit,[{auth_backends,[rabbit_auth_backend_internal]}]}],
@@ -118,16 +121,34 @@ ssl_options.fail_if_no_peer_cert = true",
   "disk_free_limit.absolute = 50000",
    [{rabbit, [{disk_free_limit, 50000}]}],[]},
 
+ {default_users,
+ "
+  default_users.a.vhost_pattern = banana
+  default_users.a.tags = administrator,operator
+  default_users.a.password = SECRET
+  default_users.a.read = .*
+ ",
+  [{rabbit, [{default_users, [
+      {<<"a">>, [{<<"vhost_pattern">>, "banana"},
+                 {<<"tags">>, [administrator, operator]},
+                 {<<"password">>, "SECRET"},
+                 {<<"read">>, ".*"}]}]}]}],
+  []},
+
  {default_policies_operator,
  "
   default_policies.operator.a.expires = 1h
   default_policies.operator.a.queue_pattern = apple
   default_policies.operator.a.vhost_pattern = banana
+  default_policies.operator.a.classic_queues.ha_mode = exactly
+  default_policies.operator.a.classic_queues.ha_params = 2
  ",
   [{rabbit, [{default_policies, [{operator, [
       {<<"a">>, [{<<"expires">>, 3600000},
-                 {<<"queue-pattern">>, "apple"},
-                 {<<"vhost-pattern">>, "banana"}]}]}]}]}],
+                 {<<"ha_mode">>, "exactly"},
+                 {<<"ha_params">>, 2},
+                 {<<"queue_pattern">>, "apple"},
+                 {<<"vhost_pattern">>, "banana"}]}]}]}]}],
   []},
 
  {default_vhost_limits,
@@ -137,7 +158,7 @@ ssl_options.fail_if_no_peer_cert = true",
  ",
   [{rabbit, [{default_limits, [{vhosts, [
       {<<"a">>, [{<<"pattern">>, "banana"},
-                 {<<"max-queues">>, 10}]}]}]}]}],
+                 {<<"max_queues">>, 10}]}]}]}]}],
   []},
 
  {default_user_settings,
@@ -266,13 +287,13 @@ tcp_listen_options.exit_on_close = false",
   "total_memory_available_override_value = 1024MB",
   [{rabbit,[{total_memory_available_override_value, "1024MB"}]}],
   []},
- {connection_max,
-  "connection_max = 999",
-  [{rabbit,[{connection_max, 999}]}],
+ {ranch_connection_max,
+  "ranch_connection_max = 999",
+  [{rabbit,[{ranch_connection_max, 999}]}],
   []},
- {connection_max,
-  "connection_max = infinity",
-  [{rabbit,[{connection_max, infinity}]}],
+ {ranch_connection_max,
+  "ranch_connection_max = infinity",
+  [{rabbit,[{ranch_connection_max, infinity}]}],
   []},
  {channel_max,
   "channel_max = 16",
@@ -875,5 +896,17 @@ credential_validator.regexp = ^abc\\d+",
    [{rabbit, [
       {quorum_compute_checksums, true}
      ]}],
+   []},
+
+  %%
+  %% Deprecated features
+  %%
+
+  {deprecated_features_cmq,
+   "deprecated_features.permit.classic_mirrored_queues = false",
+   [{rabbit, [
+      {permitted_deprecated_features, #{classic_mirrored_queues => false}}
+     ]}],
    []}
+
 ].

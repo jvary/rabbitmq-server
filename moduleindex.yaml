@@ -69,7 +69,6 @@ credentials_obfuscation:
 ct_helper:
 - ct_helper
 - ct_helper_error_h
-- erl_make_certs
 cuttlefish:
 - conf_parse
 - cuttlefish
@@ -135,6 +134,8 @@ emqtt:
 - emqtt_inflight
 - emqtt_props
 - emqtt_quic
+- emqtt_quic_connection
+- emqtt_quic_stream
 - emqtt_secret
 - emqtt_sock
 - emqtt_ws
@@ -383,11 +384,13 @@ ra:
 - ra_dbg
 - ra_directory
 - ra_env
+- ra_ets_queue
 - ra_file_handle
 - ra_flru
 - ra_leaderboard
 - ra_lib
 - ra_log
+- ra_log_cache
 - ra_log_ets
 - ra_log_meta
 - ra_log_pre_init

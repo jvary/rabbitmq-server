@@ -293,15 +293,16 @@ batch_publish_delivered(Publishes, ChPid, Flow,
     State1 = State #state { backing_queue_state = BQS1 },
     {AckTags, ensure_monitoring(ChPid, State1)}.
 
-discard(MsgId, ChPid, Flow, State = #state { gm                  = GM,
-                                             backing_queue       = BQ,
-                                             backing_queue_state = BQS,
-                                             seen_status         = SS }) ->
+discard(Message = #basic_message{id = MsgId},
+        ChPid, Flow, State = #state { gm                  = GM,
+                                      backing_queue       = BQ,
+                                      backing_queue_state = BQS,
+                                      seen_status         = SS }) ->
     false = maps:is_key(MsgId, SS), %% ASSERTION
-    ok = gm:broadcast(GM, {discard, ChPid, Flow, MsgId}),
+    ok = gm:broadcast(GM, {discard, ChPid, Flow, Message}),
     ensure_monitoring(ChPid,
                       State #state { backing_queue_state =
-                                         BQ:discard(MsgId, ChPid, Flow, BQS) }).
+                                         BQ:discard(Message, ChPid, Flow, BQS) }).
 
 dropwhile(Pred, State = #state{backing_queue       = BQ,
                                backing_queue_state = BQS }) ->
@@ -494,14 +495,9 @@ set_queue_mode(Mode, State = #state { gm                  = GM,
 set_queue_version(Version, State = #state { gm                  = GM,
                                             backing_queue       = BQ,
                                             backing_queue_state = BQS }) ->
-    case rabbit_feature_flags:is_enabled(classic_mirrored_queue_version) of
-        true ->
-            ok = gm:broadcast(GM, {set_queue_version, Version}),
-            BQS1 = BQ:set_queue_version(Version, BQS),
-            State #state { backing_queue_state = BQS1 };
-        false ->
-            State
-    end.
+    ok = gm:broadcast(GM, {set_queue_version, Version}),
+    BQS1 = BQ:set_queue_version(Version, BQS),
+    State #state { backing_queue_state = BQS1 }.
 
 zip_msgs_and_acks(Msgs, AckTags, Accumulator,
                   #state { backing_queue = BQ,
@@ -518,7 +514,8 @@ zip_msgs_and_acks(Msgs, AckTags, Accumulator,
             master_state().
 
 promote_backing_queue_state(QName, CPid, BQ, BQS, GM, AckTags, Seen, KS) ->
-    {_MsgIds, BQS1} = BQ:requeue(AckTags, BQS),
+    {MsgIds, BQS1} = BQ:requeue(AckTags, BQS),
+    ok = gm:broadcast(GM, {requeue, MsgIds}),
     Len   = BQ:len(BQS1),
     Depth = BQ:depth(BQS1),
     true = Len == Depth, %% ASSERTION: everything must have been requeued

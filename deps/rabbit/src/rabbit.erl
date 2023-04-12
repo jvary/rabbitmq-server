@@ -193,6 +193,12 @@
                    [{description, "core initialized"},
                     {requires,    kernel_ready}]}).
 
+-rabbit_boot_step({deprecate_cmqs,
+                   [{description, "checks whether mirrored queues are disabled"},
+                    {mfa, {rabbit_mirror_queue_misc, prevent_startup_when_mirroring_is_disabled_but_configured, []}},
+                    {requires, [database]},
+                    {enables, [recovery]}]}).
+
 -rabbit_boot_step({recovery,
                    [{description, "exchange, queue and binding recovery"},
                     {mfa,         {rabbit, recover, []}},
@@ -208,16 +214,6 @@
 -rabbit_boot_step({routing_ready,
                    [{description, "message delivery logic ready"},
                     {requires,    [core_initialized, recovery]}]}).
-
--rabbit_boot_step({connection_tracking,
-                   [{description, "connection tracking infrastructure"},
-                    {mfa,         {rabbit_connection_tracking, boot, []}},
-                    {enables,     routing_ready}]}).
-
--rabbit_boot_step({channel_tracking,
-                   [{description, "channel tracking infrastructure"},
-                    {mfa,         {rabbit_channel_tracking, boot, []}},
-                    {enables,     routing_ready}]}).
 
 -rabbit_boot_step({background_gc,
                    [{description, "background garbage collection"},
@@ -1036,7 +1032,7 @@ prep_stop(State) ->
 
 stop(State) ->
     ok = rabbit_alarm:stop(),
-    ok = case rabbit_mnesia:is_clustered() of
+    ok = case rabbit_db_cluster:is_clustered() of
              true  -> ok;
              false -> rabbit_table:clear_ram_only_tables()
          end,
@@ -1059,7 +1055,6 @@ boot_delegate() ->
 -spec recover() -> 'ok'.
 
 recover() ->
-    ok = rabbit_policy:recover(),
     ok = rabbit_vhost:recover(),
     ok.
 

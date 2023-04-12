@@ -5,7 +5,7 @@
 ## Copyright (c) 2007-2023 VMware, Inc. or its affiliates.  All rights reserved.
 
 defmodule RabbitMQ.CLI.Ctl.Commands.AddVhostCommand do
-  alias RabbitMQ.CLI.Core.{DocGuide, ExitCodes, FeatureFlags, Helpers}
+  alias RabbitMQ.CLI.Core.{DocGuide, ExitCodes, Helpers}
 
   @behaviour RabbitMQ.CLI.CommandBehaviour
 
@@ -49,6 +49,10 @@ defmodule RabbitMQ.CLI.Ctl.Commands.AddVhostCommand do
 
   def output({:error, :invalid_queue_type}, _opts) do
     {:error, ExitCodes.exit_usage(), "Unsupported default queue type"}
+  end
+
+  def output({:badrpc, {:EXIT, {:vhost_limit_exceeded, msg}}}, _opts) do
+    {:error, ExitCodes.exit_usage(), msg}
   end
 
   use RabbitMQ.CLI.DefaultOutput

@@ -9,30 +9,55 @@ erlc_opts(
         "@rules_erlang//:debug_build": [
             "+debug_info",
             "+warn_export_all",
-            "+warn_unused_vars",
+            "+warn_obsolete_guard",
             "+warn_shadow_vars",
             "+warn_unused_import",
-            "+warn_obsolete_guard",
+            "+warn_unused_vars",
             "-DBUILD_WITHOUT_QUIC",
         ],
         "//conditions:default": [
             "+debug_info",
+            "+deterministic",
             "+warn_export_all",
-            "+warn_unused_vars",
+            "+warn_obsolete_guard",
             "+warn_shadow_vars",
             "+warn_unused_import",
-            "+warn_obsolete_guard",
+            "+warn_unused_vars",
             "-DBUILD_WITHOUT_QUIC",
-            "+deterministic",
         ],
     }),
     visibility = [":__subpackages__"],
 )
 
 erlang_bytecode(
-    name = "ebin_emqtt_beam",
-    srcs = ["src/emqtt.erl"],
-    outs = ["ebin/emqtt.beam"],
+    name = "other_beam",
+    testonly = True,
+    srcs = [
+        "src/emqtt.erl",
+        "src/emqtt_cli.erl",
+        "src/emqtt_frame.erl",
+        "src/emqtt_inflight.erl",
+        "src/emqtt_props.erl",
+        "src/emqtt_quic.erl",
+        "src/emqtt_quic_connection.erl",
+        "src/emqtt_quic_stream.erl",
+        "src/emqtt_secret.erl",
+        "src/emqtt_sock.erl",
+        "src/emqtt_ws.erl",
+    ],
+    outs = [
+        "ebin/emqtt.beam",
+        "ebin/emqtt_cli.beam",
+        "ebin/emqtt_frame.beam",
+        "ebin/emqtt_inflight.beam",
+        "ebin/emqtt_props.beam",
+        "ebin/emqtt_quic.beam",
+        "ebin/emqtt_quic_connection.beam",
+        "ebin/emqtt_quic_stream.beam",
+        "ebin/emqtt_secret.beam",
+        "ebin/emqtt_sock.beam",
+        "ebin/emqtt_ws.beam",
+    ],
     hdrs = [
         "include/emqtt.hrl",
         "include/logger.hrl",
@@ -41,91 +66,15 @@ erlang_bytecode(
     erlc_opts = "//:erlc_opts",
 )
 
-erlang_bytecode(
-    name = "ebin_emqtt_cli_beam",
-    srcs = ["src/emqtt_cli.erl"],
-    outs = ["ebin/emqtt_cli.beam"],
-    hdrs = ["include/emqtt.hrl"],
-    app_name = "emqtt",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_emqtt_frame_beam",
-    srcs = ["src/emqtt_frame.erl"],
-    outs = ["ebin/emqtt_frame.beam"],
-    hdrs = ["include/emqtt.hrl"],
-    app_name = "emqtt",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_emqtt_inflight_beam",
-    srcs = ["src/emqtt_inflight.erl"],
-    outs = ["ebin/emqtt_inflight.beam"],
-    hdrs = ["include/emqtt.hrl"],
-    app_name = "emqtt",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_emqtt_props_beam",
-    srcs = ["src/emqtt_props.erl"],
-    outs = ["ebin/emqtt_props.beam"],
-    hdrs = ["include/emqtt.hrl"],
-    app_name = "emqtt",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_emqtt_quic_beam",
-    srcs = ["src/emqtt_quic.erl"],
-    outs = ["ebin/emqtt_quic.beam"],
-    app_name = "emqtt",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_emqtt_secret_beam",
-    srcs = ["src/emqtt_secret.erl"],
-    outs = ["ebin/emqtt_secret.beam"],
-    app_name = "emqtt",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_emqtt_sock_beam",
-    srcs = ["src/emqtt_sock.erl"],
-    outs = ["ebin/emqtt_sock.beam"],
-    app_name = "emqtt",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_emqtt_ws_beam",
-    srcs = ["src/emqtt_ws.erl"],
-    outs = ["ebin/emqtt_ws.beam"],
-    app_name = "emqtt",
-    erlc_opts = "//:erlc_opts",
-)
-
 filegroup(
     name = "beam_files",
-    srcs = [
-        "ebin/emqtt.beam",
-        "ebin/emqtt_cli.beam",
-        "ebin/emqtt_frame.beam",
-        "ebin/emqtt_inflight.beam",
-        "ebin/emqtt_props.beam",
-        "ebin/emqtt_quic.beam",
-        "ebin/emqtt_secret.beam",
-        "ebin/emqtt_sock.beam",
-        "ebin/emqtt_ws.beam",
-    ],
+    testonly = True,
+    srcs = [":other_beam"],
 )
 
 filegroup(
     name = "srcs",
+    testonly = True,
     srcs = [
         "src/emqtt.app.src",
         "src/emqtt.erl",
@@ -134,6 +83,8 @@ filegroup(
         "src/emqtt_inflight.erl",
         "src/emqtt_props.erl",
         "src/emqtt_quic.erl",
+        "src/emqtt_quic_connection.erl",
+        "src/emqtt_quic_stream.erl",
         "src/emqtt_secret.erl",
         "src/emqtt_sock.erl",
         "src/emqtt_ws.erl",
@@ -142,11 +93,12 @@ filegroup(
 
 filegroup(
     name = "private_hdrs",
-    srcs = [],
+    testonly = True,
 )
 
 filegroup(
     name = "public_hdrs",
+    testonly = True,
     srcs = [
         "include/emqtt.hrl",
         "include/logger.hrl",
@@ -155,16 +107,20 @@ filegroup(
 
 filegroup(
     name = "priv",
-    srcs = [],
+    testonly = True,
 )
 
 filegroup(
     name = "licenses",
-    srcs = ["LICENSE"],
+    testonly = True,
+    srcs = [
+        "LICENSE",
+    ],
 )
 
 filegroup(
     name = "public_and_private_hdrs",
+    testonly = True,
     srcs = [
         ":private_hdrs",
         ":public_hdrs",
@@ -173,6 +129,7 @@ filegroup(
 
 filegroup(
     name = "all_srcs",
+    testonly = True,
     srcs = [
         ":public_and_private_hdrs",
         ":srcs",
@@ -181,6 +138,7 @@ filegroup(
 
 erlang_app(
     name = "erlang_app",
+    testonly = True,
     srcs = [":all_srcs"],
     hdrs = [":public_hdrs"],
     app_name = "emqtt",

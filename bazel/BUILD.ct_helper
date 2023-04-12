@@ -16,70 +16,62 @@ erlc_opts(
 )
 
 erlang_bytecode(
-    name = "ebin_ct_helper_beam",
-    srcs = ["src/ct_helper.erl"],
-    outs = ["ebin/ct_helper.beam"],
-    app_name = "ct_helper",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_ct_helper_error_h_beam",
-    srcs = ["src/ct_helper_error_h.erl"],
-    outs = ["ebin/ct_helper_error_h.beam"],
-    app_name = "ct_helper",
-    erlc_opts = "//:erlc_opts",
-)
-
-erlang_bytecode(
-    name = "ebin_erl_make_certs_beam",
-    srcs = ["src/erl_make_certs.erl"],
-    outs = ["ebin/erl_make_certs.beam"],
+    name = "other_beam",
+    testonly = True,
+    srcs = [
+        "src/ct_helper.erl",
+        "src/ct_helper_error_h.erl"
+    ],
+    outs = [
+        "ebin/ct_helper.beam",
+        "ebin/ct_helper_error_h.beam"
+    ],
     app_name = "ct_helper",
     erlc_opts = "//:erlc_opts",
 )
 
 filegroup(
     name = "beam_files",
-    srcs = [
-        "ebin/ct_helper.beam",
-        "ebin/ct_helper_error_h.beam",
-        "ebin/erl_make_certs.beam",
-    ],
+    testonly = True,
+    srcs = [":other_beam"],
 )
 
 filegroup(
     name = "srcs",
+    testonly = True,
     srcs = [
         "src/ct_helper.app.src",
         "src/ct_helper.erl",
-        "src/ct_helper_error_h.erl",
-        "src/erl_make_certs.erl",
+        "src/ct_helper_error_h.erl"
     ],
 )
 
 filegroup(
     name = "private_hdrs",
-    srcs = [],
+    testonly = True,
 )
 
 filegroup(
     name = "public_hdrs",
-    srcs = [],
+    testonly = True,
 )
 
 filegroup(
     name = "priv",
-    srcs = [],
+    testonly = True,
 )
 
 filegroup(
     name = "licenses",
-    srcs = ["LICENSE"],
+    testonly = True,
+    srcs = [
+        "LICENSE",
+    ],
 )
 
 filegroup(
     name = "public_and_private_hdrs",
+    testonly = True,
     srcs = [
         ":private_hdrs",
         ":public_hdrs",
@@ -88,6 +80,7 @@ filegroup(
 
 filegroup(
     name = "all_srcs",
+    testonly = True,
     srcs = [
         ":public_and_private_hdrs",
         ":srcs",
@@ -96,6 +89,7 @@ filegroup(
 
 erlang_app(
     name = "erlang_app",
+    testonly = True,
     srcs = [":all_srcs"],
     app_name = "ct_helper",
     beam_files = [":beam_files"],

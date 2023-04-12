@@ -7,6 +7,7 @@
 
 -module(rabbit_mirror_queue_misc).
 -behaviour(rabbit_policy_validator).
+-behaviour(rabbit_policy_merge_strategy).
 
 -include("amqqueue.hrl").
 
@@ -15,6 +16,7 @@
          initial_queue_node/2, suggested_queue_nodes/1, actual_queue_nodes/1,
          is_mirrored/1, is_mirrored_ha_nodes/1,
          update_mirrors/2, update_mirrors/1, validate_policy/1,
+         merge_policy_value/3,
          maybe_auto_sync/1, maybe_drop_master_after_sync/1,
          sync_batch_size/1, default_max_sync_throughput/0,
          log_info/3, log_warning/3]).
@@ -23,6 +25,8 @@
 -export([sync_queue/1, cancel_sync_queue/1, queue_length/1]).
 
 -export([get_replicas/1, transfer_leadership/2, migrate_leadership_to_existing_replica/2]).
+
+-export([prevent_startup_when_mirroring_is_disabled_but_configured/0]).
 
 %% for testing only
 -export([module/1]).
@@ -46,6 +50,14 @@
             [policy_validator, <<"ha-promote-on-shutdown">>, ?MODULE]}},
      {mfa, {rabbit_registry, register,
             [policy_validator, <<"ha-promote-on-failure">>, ?MODULE]}},
+     {mfa, {rabbit_registry, register,
+            [operator_policy_validator, <<"ha-mode">>, ?MODULE]}},
+     {mfa, {rabbit_registry, register,
+            [operator_policy_validator, <<"ha-params">>, ?MODULE]}},
+     {mfa, {rabbit_registry, register,
+            [policy_merge_strategy, <<"ha-mode">>, ?MODULE]}},
+     {mfa, {rabbit_registry, register,
+            [policy_merge_strategy, <<"ha-params">>, ?MODULE]}},
      {requires, rabbit_registry},
      {enables, recovery}]}).
 
@@ -714,6 +726,63 @@ maybe_drop_master_after_sync(Q) when ?is_amqqueue(Q) ->
 
 %%----------------------------------------------------------------------------
 
+mirroring_policies() ->
+    Policies = rabbit_policy:list_as_maps(),
+    OpPolicies = rabbit_policy:list_op_as_maps(),
+    IsMirroringPolicy = fun
+        (#{definition := #{<<"ha-mode">> := _}}) ->
+            true;
+        (_) ->
+            false
+    end,
+    {lists:filter(IsMirroringPolicy, Policies), lists:filter(IsMirroringPolicy, OpPolicies)}.
+
+report_vhosts_using_mirroring(MirrorPolicies, PolicyType) ->
+    PerVhost = lists:foldr(
+                 fun (#{vhost := VHost, name := Name}, Acc) ->
+                         maps:update_with(
+                           VHost,
+                           fun (Message) -> <<Name/binary, ", ", Message/binary>> end,
+                           <<"Virtual host ", VHost/binary, " has ", PolicyType/binary,
+                             " policies that configure mirroring: ", Name/binary>>,
+                           Acc)
+                 end,
+                 #{}, MirrorPolicies),
+    lists:foreach(
+      fun (Msg) -> rabbit_log:error("~ts", [Msg]) end,
+      maps:values(PerVhost)).
+
+prevent_startup_when_mirroring_is_disabled_but_configured() ->
+    case are_cmqs_permitted() of
+        true ->
+            ok;
+        false ->
+            Error = {error, {failed_to_deny_deprecated_features, [classic_mirrored_queues]}},
+            case mirroring_policies() of
+                {[], []} ->
+                    ok;
+                {Pols, []} ->
+                    report_vhosts_using_mirroring(Pols, <<"user">>),
+                    exit(Error);
+                {[], OpPols} ->
+                    report_vhosts_using_mirroring(OpPols, <<"operator">>),
+                    exit(Error);
+                {Pols, OpPols} ->
+                    report_vhosts_using_mirroring(Pols, <<"user">>),
+                    report_vhosts_using_mirroring(OpPols, <<"operator">>),
+                    exit(Error)
+            end
+    end.
+
+are_cmqs_permitted() ->
+    %% FeatureName = classic_mirrored_queues,
+    %% rabbit_deprecated_features:is_permitted(FeatureName).
+    case application:get_env(rabbit, permitted_deprecated_features) of
+        {ok, #{classic_mirrored_queues := false}} ->
+            false;
+        _ -> true
+    end.
+
 validate_policy(KeyList) ->
     Mode = proplists:get_value(<<"ha-mode">>, KeyList, none),
     Params = proplists:get_value(<<"ha-params">>, KeyList, none),
@@ -724,10 +793,12 @@ validate_policy(KeyList) ->
                           <<"ha-promote-on-shutdown">>, KeyList, none),
     PromoteOnFailure = proplists:get_value(
                           <<"ha-promote-on-failure">>, KeyList, none),
-    case {Mode, Params, SyncMode, SyncBatchSize, PromoteOnShutdown, PromoteOnFailure} of
-        {none, none, none, none, none, none} ->
+    case {are_cmqs_permitted(), Mode, Params, SyncMode, SyncBatchSize, PromoteOnShutdown, PromoteOnFailure} of
+        {_, none, none, none, none, none, none} ->
             ok;
-        {none, _, _, _, _, _} ->
+        {false, _, _, _, _, _, _} ->
+            {error, "Classic queue mirroring is disabled via node configuration", []};
+        {_, none, _, _, _, _, _} ->
             {error, "ha-mode must be specified to specify ha-params, "
              "ha-sync-mode or ha-promote-on-shutdown", []};
         _ ->
@@ -787,4 +858,37 @@ validate_pof(PromoteOnShutdown) ->
         none              -> ok;
         Mode              -> {error, "ha-promote-on-failure must be "
                               "\"always\" or \"when-synced\", got ~tp", [Mode]}
+    end.
+
+merge_policy_value(<<"ha-mode">>, Val, Val) ->
+    Val;
+merge_policy_value(<<"ha-mode">>, <<"all">> = Val, _OpVal) ->
+    Val;
+merge_policy_value(<<"ha-mode">>, _Val, <<"all">> = OpVal) ->
+    OpVal;
+merge_policy_value(<<"ha-mode">>, <<"exactly">> = Val, _OpVal) ->
+    Val;
+merge_policy_value(<<"ha-mode">>, _Val, <<"exactly">> = OpVal) ->
+    OpVal;
+%% Both values are integers, both are ha-mode 'exactly'
+merge_policy_value(<<"ha-params">>, Val, OpVal) when is_integer(Val)
+                                                     andalso
+                                                     is_integer(OpVal)->
+    if Val > OpVal ->
+            Val;
+       true ->
+            OpVal
+    end;
+%% The integer values is of ha-mode 'exactly', the other is a list and of
+%% ha-mode 'nodes'. 'exactly' takes precedence
+merge_policy_value(<<"ha-params">>, Val, _OpVal) when is_integer(Val) ->
+    Val;
+merge_policy_value(<<"ha-params">>, _Val, OpVal) when is_integer(OpVal) ->
+    OpVal;
+%% Both values are lists, of ha-mode 'nodes', max length takes precedence.
+merge_policy_value(<<"ha-params">>, Val, OpVal) ->
+    if length(Val) > length(OpVal) ->
+            Val;
+       true ->
+            OpVal
     end.

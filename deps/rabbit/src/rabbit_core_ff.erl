@@ -10,7 +10,6 @@
 -rabbit_feature_flag(
    {classic_mirrored_queue_version,
     #{desc          => "Support setting version for classic mirrored queues",
-      %%TODO remove compatibility code
       stability     => required
      }}).
 
@@ -85,7 +84,6 @@
 -rabbit_feature_flag(
    {tracking_records_in_ets,
     #{desc          => "Store tracking records in ETS instead of Mnesia",
-      %%TODO remove compatibility code
       stability     => required,
       depends_on    => [feature_flags_v2]
      }}).
@@ -105,4 +103,13 @@
       "Used to implement stream leader rebalancing",
       stability     => stable,
       depends_on    => [stream_queue]
+     }}).
+
+
+-rabbit_feature_flag(
+   {stream_sac_coordinator_unblock_group,
+    #{desc          => "Bug fix to unblock a group of consumers in a super stream partition",
+      doc_url       => "https://github.com/rabbitmq/rabbitmq-server/issues/7743",
+      stability     => stable,
+      depends_on    => [stream_single_active_consumer]
      }}).

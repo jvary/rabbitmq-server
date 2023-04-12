@@ -180,7 +180,7 @@ is_member(Node) when is_atom(Node) ->
 %% @see filter_members/1.
 
 list_members() ->
-    mnesia:system_info(db_nodes).
+    rabbit_db_cluster:members().
 
 -spec filter_members(Nodes) -> Nodes when
       Nodes :: [node()].
@@ -559,7 +559,7 @@ target_cluster_size_hint() ->
 
 -spec reached_target_cluster_size() -> boolean().
 reached_target_cluster_size() ->
-    running_count() >= target_cluster_size_hint().
+    total_count() >= target_cluster_size_hint().
 
 -spec if_reached_target_cluster_size(ConditionSatisfiedFun :: fun(), ConditionNotSatisfiedFun :: fun()) -> boolean().
 if_reached_target_cluster_size(ConditionSatisfiedFun, ConditionNotSatisfiedFun) ->

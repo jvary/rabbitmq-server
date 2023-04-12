@@ -6,32 +6,26 @@
 
 defmodule RabbitMQ.CLI.Ctl.Commands.HashPasswordCommand do
   alias RabbitMQ.CLI.Core.{Input}
+
   @behaviour RabbitMQ.CLI.CommandBehaviour
   use RabbitMQ.CLI.Core.MergesNoDefaults
 
-  def run([cleartextpassword], %{node: node_name}) do
-    hash_password(cleartextpassword, node_name)
+  def run([cleartextpassword], _opts) do
+    hash_password(cleartextpassword)
   end
 
-  def run([], %{node: node_name} = opts) do
+  def run([], opts) do
     case Input.infer_password("Password: ", opts) do
       :eof ->
         {:error, :not_enough_args}
 
       password ->
-        hash_password(password, node_name)
+        hash_password(password)
     end
   end
 
-  def hash_password(password, node_name) do
-    hashed_pwd =
-      :rabbit_misc.rpc_call(
-        node_name,
-        :rabbit_password,
-        :hash,
-        [password]
-      )
-
+  def hash_password(password) do
+    hashed_pwd = :rabbit_password.hash(password)
     Base.encode64(hashed_pwd)
   end
 
@@ -51,6 +45,7 @@ defmodule RabbitMQ.CLI.Ctl.Commands.HashPasswordCommand do
     :ok
   end
 
+  ## Use default output for all non-special case outputs
   use RabbitMQ.CLI.DefaultOutput
 
   def usage, do: "hash_password <cleartext_password>"
@@ -60,4 +55,6 @@ defmodule RabbitMQ.CLI.Ctl.Commands.HashPasswordCommand do
 
   def banner([], _options),
     do: "Will hash provided password"
+
+  def description(), do: "Hashes a plaintext password"
 end

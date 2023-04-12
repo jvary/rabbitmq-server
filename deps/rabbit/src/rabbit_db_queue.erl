@@ -279,7 +279,11 @@ delete_in_mnesia(QueueName, Reason) ->
                   {[], []} ->
                       ok;
                   _ ->
-                      internal_delete_in_mnesia(QueueName, false, Reason)
+                      OnlyDurable = case Reason of
+                                        missing_owner -> true;
+                                        _ -> false
+                                    end,
+                      internal_delete_in_mnesia(QueueName, OnlyDurable, Reason)
               end
       end).
 
@@ -489,7 +493,8 @@ exists_in_mnesia(QName) ->
       QName :: rabbit_amqqueue:name(),
       Exists :: boolean().
 %% @doc Indicates if queue named `QName' exists using a consistent read.
-%% Just used by `rabbit_classic_queue:is_recoverable` for transient queues.
+%%
+%% Just used by `rabbit_classic_queue:is_recoverable()' for transient queues.
 %%
 %% @returns true if the queue exists, false otherwise.
 %%

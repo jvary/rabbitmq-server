@@ -25,6 +25,7 @@ groups() ->
     ClusterSize1Tests = [
         vhost_is_created_with_default_limits,
         vhost_is_created_with_operator_policies,
+        vhost_is_created_with_default_user,
         single_node_vhost_deletion_forces_connection_closure,
         vhost_failure_forces_connection_closure,
         vhost_creation_idempotency,
@@ -97,7 +98,6 @@ end_per_group(_Group, Config) ->
 
 init_per_testcase(Testcase, Config) ->
     rabbit_ct_helpers:testcase_started(Config, Testcase),
-    clear_all_connection_tracking_tables(Config),
     Config.
 
 end_per_testcase(Testcase, Config) ->
@@ -110,7 +110,6 @@ end_per_testcase(Testcase, Config) ->
             delete_vhost(Config, VHost2)
     end,
     delete_vhost(Config, VHost1),
-    clear_all_connection_tracking_tables(Config),
     rabbit_ct_helpers:testcase_finished(Config, Testcase).
 
 delete_vhost(Config, VHost) ->
@@ -118,13 +117,6 @@ delete_vhost(Config, VHost) ->
         ok                          -> ok;
         {error, {no_such_vhost, _}} -> ok
     end.
-
-clear_all_connection_tracking_tables(Config) ->
-    [rabbit_ct_broker_helpers:rpc(Config,
-        N,
-        rabbit_connection_tracking,
-        clear_tracked_connection_tables_for_this_node,
-        []) || N <- rabbit_ct_broker_helpers:get_node_configs(Config, nodename)].
 
 %% -------------------------------------------------------------------
 %% Test cases.
@@ -383,6 +375,44 @@ vhost_is_created_with_operator_policies(Config) ->
     ?assertEqual(ok, rabbit_ct_broker_helpers:add_vhost(Config, VHost)),
     ?assertNotEqual(not_found, rabbit_ct_broker_helpers:rpc(Config, 0,
                             rabbit_policy, lookup_op, [VHost, PolicyName])).
+
+vhost_is_created_with_default_user(Config) ->
+    VHost = <<"vhost1">>,
+    Username = <<"banana">>,
+    Perm = "apple",
+    Tags = [arbitrary],
+    Pwd = "SECRET",
+    Env = [{Username, [{<<"configure">>, Perm}, {<<"tags">>, [arbitrary]}, {<<"password">>, Pwd}]}],
+    WantUser = [{user, Username},{tags, Tags}],
+    WantPermissions = [[{vhost, VHost}, {configure, list_to_binary(Perm)}, {write, <<".*">>}, {read, <<".*">>}]],
+    ?assertEqual(ok, rabbit_ct_broker_helpers:rpc(Config, 0,
+                            application, set_env, [rabbit, default_users, Env])),
+    ?assertEqual(false, rabbit_ct_broker_helpers:rpc(Config, 0,
+                            rabbit_auth_backend_internal, exists, [Username])),
+    ?assertEqual(ok, rabbit_ct_broker_helpers:add_vhost(Config, VHost)),
+    ct:pal("HAVE: ~p", [rabbit_ct_broker_helpers:rpc(Config, 0,
+                            rabbit_auth_backend_internal, list_user_permissions, [Username])]),
+    ct:pal("WANT: ~p", [WantPermissions]),
+    ?assertEqual(WantPermissions, rabbit_ct_broker_helpers:rpc(Config, 0,
+                            rabbit_auth_backend_internal, list_user_permissions, [Username])),
+    HaveUser = lists:search(
+              fun (U) ->
+                  case proplists:get_value(user, U) of
+                      Username  -> true;
+                      undefined -> false
+                  end
+              end,
+              rabbit_ct_broker_helpers:rpc(Config, 0,
+                                             rabbit_auth_backend_internal, list_users, [])
+            ),
+    ?assertEqual({value, WantUser}, HaveUser),
+    ?assertMatch({ok, _}, rabbit_ct_broker_helpers:rpc(Config, 0,
+                            rabbit_auth_backend_internal, user_login_authentication, [Username, [{password, list_to_binary(Pwd)}]])),
+    ?assertEqual(ok, rabbit_ct_broker_helpers:rpc(Config, 0,
+                    application, unset_env, [rabbit, default_users])),
+    ?assertEqual(ok, rabbit_ct_broker_helpers:rpc(Config, 0,
+                            rabbit_auth_backend_internal, delete_user, [Username,
+                                                                        <<"acting-user">>])).
 
 parse_tags(Config) ->
     rabbit_ct_broker_helpers:rpc(Config, 0, ?MODULE, parse_tags1, [Config]).

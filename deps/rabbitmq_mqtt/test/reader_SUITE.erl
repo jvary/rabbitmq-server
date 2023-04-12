@@ -37,7 +37,6 @@ groups() ->
        quorum_clean_session_true,
        classic_clean_session_true,
        classic_clean_session_false,
-       non_clean_sess_empty_client_id,
        event_authentication_failure,
        rabbit_mqtt_qos0_queue_overflow
       ]}
@@ -218,22 +217,6 @@ classic_clean_session_true(Config) ->
 classic_clean_session_false(Config) ->
     validate_durable_queue_type(Config, <<"classicCleanSessionFalse">>, false, rabbit_classic_queue).
 
-%% "If the Client supplies a zero-byte ClientId with CleanSession set to 0,
-%% the Server MUST respond to the CONNECT Packet with a CONNACK return code 0x02
-%% (Identifier rejected) and then close the Network Connection" [MQTT-3.1.3-8].
-non_clean_sess_empty_client_id(Config) ->
-    {ok, C} = emqtt:start_link(
-                [{clientid, <<>>},
-                 {clean_start, false},
-                 {proto_ver, v4},
-                 {host, "localhost"},
-                 {port, rabbit_ct_broker_helpers:get_node_config(Config, 0, tcp_port_mqtt)}
-                ]),
-    process_flag(trap_exit, true),
-    ?assertMatch({error, {client_identifier_not_valid, _}},
-                 emqtt:connect(C)),
-    ok = await_exit(C).
-
 event_authentication_failure(Config) ->
     {ok, C} = emqtt:start_link(
                 [{username, <<"Trudy">>},
@@ -264,7 +247,7 @@ rabbit_mqtt_qos0_queue_overflow(Config) ->
     ok = rabbit_ct_broker_helpers:enable_feature_flag(Config, rabbit_mqtt_qos0_queue),
 
     Topic = atom_to_binary(?FUNCTION_NAME),
-    Msg = binary:copy(<<"x">>, 1000),
+    Msg = binary:copy(<<"x">>, 2000),
     NumMsgs = 10_000,
 
     %% Provoke TCP back-pressure from client to server by using very small buffers.
@@ -286,7 +269,7 @@ rabbit_mqtt_qos0_queue_overflow(Config) ->
                   end, lists:seq(1, NumMsgs)),
 
     %% Give the server some time to process (either send or drop) the messages.
-    timer:sleep(2000),
+    timer:sleep(2500),
 
     %% Let's resume the receiving client to receive any remaining messages that did
     %% not get dropped.

@@ -129,7 +129,7 @@ is_recoverable(Q) when ?is_amqqueue(Q) ->
     %% the policy). Thus, we must check if the local pid is alive
     %% - if the record is present - in order to restart.
     (not rabbit_db_queue:consistent_exists(amqqueue:get_name(Q))
-     orelse not rabbit_mnesia:is_process_alive(amqqueue:get_pid(Q))).
+     orelse not rabbit_process:is_process_alive(amqqueue:get_pid(Q))).
 
 recover(VHost, Queues) ->
     {ok, BQ} = application:get_env(rabbit, backing_queue_module),
@@ -142,13 +142,28 @@ recover(VHost, Queues) ->
         {ok, _}         ->
             RecoveredQs = recover_durable_queues(lists:zip(Queues,
                                                            OrderedRecoveryTerms)),
-            RecoveredNames = [amqqueue:get_name(Q) || Q <- RecoveredQs],
-            FailedQueues = [Q || Q <- Queues,
-                                 not lists:member(amqqueue:get_name(Q), RecoveredNames)],
-            {RecoveredQs, FailedQueues};
+            FailedQs = find_missing_queues(Queues,RecoveredQs),
+            {RecoveredQs, FailedQs};
         {error, Reason} ->
             rabbit_log:error("Failed to start queue supervisor for vhost '~ts': ~ts", [VHost, Reason]),
             throw({error, Reason})
+    end.
+
+find_missing_queues(Q1s, Q2s) when length(Q1s) == length(Q2s)->
+    [];
+find_missing_queues(Q1s, Q2s) ->
+    find_missing_queues(lists:sort(Q1s), lists:sort(Q2s), []).
+
+find_missing_queues([], _, Acc) ->
+    Acc;
+find_missing_queues(Q1s, [], Acc) ->
+    Q1s ++ Acc;
+find_missing_queues([Q1|Rem1], [Q2|Rem2] = Q2s, Acc) ->
+    case amqqueue:get_name(Q1) == amqqueue:get_name(Q2) of
+        true ->
+            find_missing_queues(Rem1, Rem2, Acc);
+        false ->
+            find_missing_queues(Rem1, Q2s, [Q1|Acc])
     end.
 
 -spec policy_changed(amqqueue:amqqueue()) -> ok.
@@ -423,11 +438,11 @@ wait_for_promoted_or_stopped(Q0) ->
         {ok, Q} ->
             QPid = amqqueue:get_pid(Q),
             SPids = amqqueue:get_slave_pids(Q),
-            case rabbit_mnesia:is_process_alive(QPid) of
+            case rabbit_process:is_process_alive(QPid) of
                 true  -> {promoted, Q};
                 false ->
                     case lists:any(fun(Pid) ->
-                                       rabbit_mnesia:is_process_alive(Pid)
+                                       rabbit_process:is_process_alive(Pid)
                                    end, SPids) of
                         %% There is a live slave. May be promoted
                         true ->
@@ -451,10 +466,9 @@ delete_crashed(Q, ActingUser) ->
                   [Q, ActingUser]).
 
 delete_crashed_internal(Q, ActingUser) ->
-    QName = amqqueue:get_name(Q),
     {ok, BQ} = application:get_env(rabbit, backing_queue_module),
     BQ:delete_crashed(Q),
-    ok = rabbit_amqqueue:internal_delete(QName, ActingUser).
+    ok = rabbit_amqqueue:internal_delete(Q, ActingUser).
 
 recover_durable_queues(QueuesAndRecoveryTerms) ->
     {Results, Failures} =

@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - erlang_version: "25.2"
+        - erlang_version: "25.3"
           elixir_version: 1.14.0
     timeout-minutes: 120
     steps:
@@ -63,3 +63,11 @@ jobs:
           --test_tag_filters=-aws,-docker,-bats,-starts-background-broker ^
           --build_tests_only ^
           --verbose_failures
+  summary-windows:
+    needs:
+    - test
+    runs-on: ubuntu-latest
+    steps:
+    - name: SUMMARY
+      run: |
+        echo "SUCCESS"
